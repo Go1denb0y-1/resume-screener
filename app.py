@@ -108,6 +108,12 @@ with st.sidebar:
         type="password",
         help="Required for AI processing"
     )
+
+    st.markdown(
+    "[🔗 Get a Gemini API Key](https://ai.google.dev/gemini-api/docs/api-key)",
+    unsafe_allow_html=True
+)
+
     
     # Debugging Tool
     if st.button("🛠 Test API Key & List Models"):
@@ -182,4 +188,5 @@ if st.button("🔍 Screen Candidates", type="primary"):
             progress_bar.progress((i + 1) / len(uploaded_files))
             time.sleep(4) # Avoid hitting rate limits too hard
             
+
         st.success("✅ Batch Screening Complete!")
