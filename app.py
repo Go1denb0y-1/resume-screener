@@ -1,192 +1,171 @@
 import streamlit as st
 import google.generativeai as genai
 from pypdf import PdfReader
+import pandas as pd
+import json
 import time
-
 
 # --- Page Configuration ---
 st.set_page_config(
-    page_title="Resume Screener AI",
-    page_icon="👥",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="Resume Screener Pro",
+    page_icon="🚀",
+    layout="wide"
 )
 
-# --- Styles ---
-st.markdown("""
-    <style>
-    .main {
-        background-color: #f8f9fa;
-    }
-    .stButton>button {
-        width: 100%;
-        background-color: #2C3E50;
-        color: white;
-        font-weight: bold;
-    }
-    .metric-box {
-        background-color: white;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
-        margin-bottom: 10px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+# --- ACCESS CONTROL ---
+def check_password():
+    def password_entered():
+        if st.session_state["password"] == st.secrets["ACCESS_CODE"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
 
-# --- Functions ---
+    if "password_correct" not in st.session_state:
+        st.text_input("🔒 Enter Access Code:", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.text_input("🔒 Enter Access Code:", type="password", on_change=password_entered, key="password")
+        st.error("😕 Password incorrect")
+        return False
+    else:
+        return True
 
+if not check_password():
+    st.stop()
+
+# --- API SETUP ---
+try:
+    api_key = st.secrets["GEMINI_API_KEY"]
+    genai.configure(api_key=api_key)
+except:
+    st.error("Secrets missing.")
+    st.stop()
+
+# --- FUNCTIONS ---
 def get_pdf_text(pdf_file):
-    """Extracts text from an uploaded PDF file."""
     text = ""
     try:
         pdf_reader = PdfReader(pdf_file)
         for page in pdf_reader.pages:
             text += page.extract_text()
-    except Exception as e:
-        st.error(f"Error reading PDF {pdf_file.name}: {e}")
+    except:
         return None
     return text
 
-def analyze_candidate(resume_text, job_description, api_key):
-    """
-    Summarizes the candidate for a recruiter.
+def analyze_candidate_json(resume_text, job_description):
+    """Asks Gemini for a JSON response to allow sorting/filtering."""
+    model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json"})
+    
+    prompt = f"""
+    Act as a Technical Recruiter. Analyze this resume against the JD.
+    Return a valid JSON object with these exact keys:
+    {{
+        "candidate_name": "Name or 'Unknown'",
+        "match_score": 0,  // Integer 0-100
+        "years_experience": "Estimate from text",
+        "key_skills": ["Skill1", "Skill2", "Skill3"],
+        "summary": "2 sentence executive summary",
+        "red_flags": "Any concerns or 'None'",
+        "email_draft": "Write a short email to the candidate inviting them for an interview"
+    }}
+
+    RESUME: {resume_text}
+    JOB DESC: {job_description}
     """
     try:
-        genai.configure(api_key=api_key)
-        
-        # Try specific modern model first, fallback logic if needed
-        model_name = 'gemini-2.5-flash'
-        model = genai.GenerativeModel(model_name)
-        
-        # Optimized Prompt for Recruiters
-        prompt = f"""
-        Act as a Senior Technical Recruiter and Talent Acquisition Specialist.
-        
-        I will provide you with a CANDIDATE RESUME and a TARGET JOB DESCRIPTION.
-        
-        YOUR GOAL:
-        Provide a concise, professional summary to help a hiring manager quickly decide if they should interview this candidate.
-        
-        OUTPUT FORMAT (Markdown):
-        
-        ### 📋 Executive Summary
-        (3-4 sentences summarizing the candidate's experience level, main industry, and key value proposition.)
-        
-        ### ⭐️ Key Strengths
-        * (List 3-5 top skills/achievements relevant to the Job Description)
-        
-        ### ⚠️ Potential Concerns
-        * (List any red flags like employment gaps, job hopping, or missing key skills. If none, say "No major concerns detected.")
-        
-        ### 📊 Match Score: [X]/10
-        (Rate the candidate's fit for the Job Description based on keywords and experience.)
-        
-        ---
-        CANDIDATE RESUME:
-        {resume_text}
-        
-        TARGET JOB DESCRIPTION:
-        {job_description}
-        """
-        
         response = model.generate_content(prompt)
-        return response.text
-            
+        return json.loads(response.text)
     except Exception as e:
-        error_msg = str(e)
-        if "404" in error_msg:
-            return f"⚠️ **Model Error:** The AI model `{model_name}` was not found. Please try upgrading your library: `pip install --upgrade google-generativeai`"
-        return f"Error processing candidate: {error_msg}"
+        return None
 
-# --- Sidebar ---
-with st.sidebar:
-    st.title("⚙️ Recruiter Admin")
-    
-    api_key = st.text_input(
-        "Enter Gemini API Key", 
-        type="password",
-        help="Required for AI processing"
-    )
+# --- UI LAYOUT ---
+st.title("🚀 Resume Screener Pro")
+st.markdown("#### The Leaderboard Edition")
 
-    st.markdown(
-    "[🔗 Get a Gemini API Key](https://ai.google.dev/gemini-api/docs/api-key)",
-    unsafe_allow_html=True
-)
+# Session State to hold results so they don't disappear on refresh
+if 'results_data' not in st.session_state:
+    st.session_state['results_data'] = []
 
-    
-    # Debugging Tool
-    if st.button("🛠 Test API Key & List Models"):
-        if not api_key:
-            st.error("Enter a key first.")
-        else:
-            try:
-                genai.configure(api_key=api_key)
-                models = list(genai.list_models())
-                st.success("✅ API Key is working!")
-                st.write("Available Models:")
-                for m in models:
-                    if 'generateContent' in m.supported_generation_methods:
-                        st.code(m.name)
-            except Exception as e:
-                st.error(f"❌ Key failed: {e}")
-    
-    st.markdown("---")
-    st.info("💡 **Tip:** Upload multiple PDFs to screen a batch of candidates at once.")
-
-# --- Main Content ---
-st.title("👥 AI Candidate Screener")
-st.markdown("#### Bulk Resume Summarization & Screening Tool")
-
-# Input Section
-col1, col2 = st.columns([1, 1])
+col1, col2 = st.columns([1, 2])
 
 with col1:
-    st.subheader("1. Target Role")
-    job_description = st.text_area(
-        "Paste Job Description (Context for grading)",
-        height=150,
-        placeholder="Paste the JD here to grade candidates against specific requirements..."
-    )
-
+    st.info("1. Setup Job Context")
+    job_description = st.text_area("Paste Job Description", height=200, placeholder="Paste JD here...")
+    
 with col2:
-    st.subheader("2. Upload Candidates")
-    uploaded_files = st.file_uploader(
-        "Upload PDF Resumes (Batch supported)", 
-        type=['pdf'], 
-        accept_multiple_files=True
-    )
-
-# --- Processing ---
-if st.button("🔍 Screen Candidates", type="primary"):
-    if not api_key:
-        st.warning("Please enter your API Key in the sidebar.")
-    elif not uploaded_files:
-        st.warning("Please upload at least one resume.")
-    elif not job_description:
-        st.warning("Please enter a Job Description for context.")
-    else:
-        st.markdown("---")
-        st.subheader(f"Processing {len(uploaded_files)} Candidates...")
-        
-        # Progress bar
-        progress_bar = st.progress(0)
-        
-        for i, uploaded_file in enumerate(uploaded_files):
-            with st.expander(f"📄 Candidate: {uploaded_file.name}", expanded=True):
-                # Extract Text
-                resume_text = get_pdf_text(uploaded_file)
+    st.info("2. upload Candidates")
+    uploaded_files = st.file_uploader("Upload Resumes (PDF)", type=['pdf'], accept_multiple_files=True)
+    
+    if st.button("Start Analysis", type="primary"):
+        if not uploaded_files or not job_description:
+            st.warning("Missing files or JD.")
+        else:
+            st.session_state['results_data'] = [] # Reset
+            progress_bar = st.progress(0)
+            status = st.empty()
+            
+            for i, file in enumerate(uploaded_files):
+                status.text(f"Analyzing {file.name}...")
+                text = get_pdf_text(file)
                 
-                if resume_text:
-                    # Generate Analysis
-                    analysis = analyze_candidate(resume_text, job_description, api_key)
-                    st.markdown(analysis)
-                else:
-                    st.error("Could not read PDF content.")
+                if text:
+                    data = analyze_candidate_json(text, job_description)
+                    if data:
+                        data['filename'] = file.name # Add filename for reference
+                        st.session_state['results_data'].append(data)
+                
+                progress_bar.progress((i + 1) / len(uploaded_files))
+                time.sleep(4) # Rate limit safety
             
-            # Update progress
-            progress_bar.progress((i + 1) / len(uploaded_files))
-            time.sleep(4) # Avoid hitting rate limits too hard
-            
+            status.success("Analysis Complete!")
 
-        st.success("✅ Batch Screening Complete!")
+# --- DISPLAY RESULTS (The Upgrade) ---
+if st.session_state['results_data']:
+    st.divider()
+    st.subheader("🏆 Candidate Leaderboard")
+    
+    # Create DataFrame
+    df = pd.DataFrame(st.session_state['results_data'])
+    
+    # Reorder columns for neatness
+    display_cols = ['candidate_name', 'match_score', 'years_experience', 'red_flags', 'filename']
+    
+    # Show Sortable Table
+    st.dataframe(
+        df[display_cols].sort_values(by='match_score', ascending=False),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "match_score": st.column_config.ProgressColumn(
+                "Match Score", format="%d", min_value=0, max_value=100
+            ),
+        }
+    )
+    
+    # Download Button (The "Money" Feature)
+    csv = df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        "📥 Download Report (CSV)",
+        csv,
+        "recruitment_report.csv",
+        "text/csv",
+        key='download-csv'
+    )
+    
+    # Detailed View
+    st.divider()
+    st.subheader("📝 Detailed Breakdown")
+    
+    for candidate in st.session_state['results_data']:
+        with st.expander(f"{candidate['match_score']}% - {candidate['candidate_name']}"):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write(f"**Experience:** {candidate['years_experience']}")
+                st.write(f"**Skills:** {', '.join(candidate['key_skills'])}")
+            with c2:
+                st.write(f"**Summary:** {candidate['summary']}")
+                st.error(f"**Red Flags:** {candidate['red_flags']}")
+            
+            st.text_area("Draft Email", candidate['email_draft'], height=100)
+
